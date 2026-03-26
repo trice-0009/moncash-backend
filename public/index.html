@@ -46,9 +46,19 @@
         const CREATE_PAYMENT_URL = '/createpayment';
 
         async function startMerchantPayment() {
-            const phone = document.getElementById('phone').value.trim();
-            if (!phone || phone.length < 8) {
-                alert("Veuillez saisir un numéro de téléphone valide.");
+            let phone = document.getElementById('phone').value.trim();
+            if (!phone) {
+                alert("Veuillez saisir un numéro de téléphone.");
+                return;
+            }
+
+            // Si le numéro a 8 chiffres, on ajoute automatiquement le préfixe 509
+            if (phone.length === 8) {
+                phone = "509" + phone;
+            }
+
+            if (phone.length < 11) {
+                alert("Le numéro MonCash doit comporter 11 chiffres (ex: 50937000000).");
                 return;
             }
 
@@ -84,7 +94,8 @@
                     success.style.display = 'block';
                     success.innerHTML = "Demande envoyée !<br>Veuillez confirmer sur votre téléphone en saisissant votre code PIN MonCash.<br><br>Statut: " + data.status;
                 } else {
-                    showError(data.error || "Une erreur est survenue.");
+                    const errorDetails = data.details ? JSON.stringify(data.details) : "";
+                    showError((data.error || "Une erreur est survenue.") + " " + errorDetails);
                 }
             } catch (e) {
                 document.getElementById('loader').style.display = 'none';
