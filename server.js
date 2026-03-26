@@ -33,6 +33,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
     console.error("ERREUR CRITIQUE : MONCASH_CLIENT_ID ou MONCASH_CLIENT_SECRET manquant sur Render !");
 } else {
     console.log(`Serveur MonCash initialisé en mode ${MONCASH_MODE.toUpperCase()}`);
+    console.log(`Compte configuré : ${MONCASH_ACCOUNT ? MONCASH_ACCOUNT.substring(0, 5) + '...' : 'AUCUN'}`);
 }
 
 const qs = require('querystring');
@@ -180,31 +181,52 @@ setInterval(() => {
     https.get(RENDER_EXTERNAL_URL, (res) => {}).on('error', (e) => {});
 }, 10 * 60 * 1000);
 
-app.get('/test-pay', async (req, res) => {
+app.get('/test-pay-ultra', async (req, res) => {
     try {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
-        const orderId = "TEST_" + Date.now();
+        const orderId = "U_" + Math.floor(Math.random() * 1000000);
         
-        const combinations = [
-            { name: "Merchant API (ref+acc)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, reference: orderId, account: MONCASH_ACCOUNT } },
-            { name: "Merchant API (ref only)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, reference: orderId } },
-            { name: "Merchant API (ordId only)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, orderId } }
+        const urls = [
+            `${BASE_DOMAIN}/V1/InitiatePayment`,
+            "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment"
+        ];
+        
+        const authHeaders = [
+            { 'Authorization': `Bearer ${accessToken}` },
+            { 'Authorization': accessToken },
+            { 'X-MonCash-Token': accessToken }
         ];
 
+        const accounts = [MONCASH_ACCOUNT, MONCASH_ACCOUNT.replace('509', '')];
+        const amounts = [10, "10", 10.0];
+        const keys = ["reference", "orderId"];
+
         const results = [];
-        for (const item of combinations) {
-            try {
-                const resp = await axios.post(item.url, item.payload, {
-                    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                    timeout: 10000
-                });
-                results.push({ name: item.name, status: resp.status, data: resp.data });
-            } catch (e) {
-                results.push({ name: item.name, error: e.response?.data || e.message });
+        for (const url of urls) {
+            for (const auth of authHeaders) {
+                for (const acc of accounts) {
+                    for (const amt of amounts) {
+                        for (const key of keys) {
+                            try {
+                                const payload = { [key]: orderId, amount: amt, account: acc };
+                                const resp = await axios.post(url, payload, {
+                                    headers: { ...auth, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                                    timeout: 3000
+                                });
+                                results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: resp.status, data: resp.data });
+                            } catch (e) {
+                                // On ne garde que les erreurs intéressantes (pas les 404 obvious)
+                                if (e.response?.status !== 404) {
+                                    results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: e.response?.status, msg: e.response?.data?.message || e.message });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        res.json({ accountUsed: MONCASH_ACCOUNT, results });
+        res.json({ results: results.slice(0, 100) });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
