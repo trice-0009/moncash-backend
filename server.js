@@ -19,9 +19,9 @@ const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi";
 async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     
-    // On n'envoie que "grant_type" dans le corps (Body) comme dans la Version PRO
     const params = new URLSearchParams();
     params.append('grant_type', 'client_credentials');
+    params.append('scope', 'read write'); // 🔥 Scope requis par MonCash
     
     const response = await axios.post(`${BASE_URL}/oauth/token`, params, {
         headers: {
