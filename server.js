@@ -200,7 +200,9 @@ app.get('/test-auth', async (req, res) => {
     const urls = [
         `${BASE_DOMAIN}/oauth/token`,
         `${BASE_DOMAIN}/Api/oauth/token`,
-        "https://sandbox.moncashbutton.digicelgroup.com/oauth/token",
+        `${BASE_DOMAIN}/MerChantApi/oauth/token`,
+        "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/oauth/token",
+        "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi/oauth/token",
         "https://moncashbutton.digicelgroup.com/Api/oauth/token"
     ];
 
