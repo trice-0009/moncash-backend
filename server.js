@@ -191,6 +191,40 @@ app.get('/verifypayment', async (req, res) => {
     }
 });
 
+app.get('/test-auth', async (req, res) => {
+    const results = [];
+    const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+    
+    // Combinaisons à tester
+    const scopes = ['read write', 'read,write', 'read', 'write'];
+    const urls = [
+        `${BASE_DOMAIN}/oauth/token`,
+        `${BASE_DOMAIN}/Api/oauth/token`,
+        "https://sandbox.moncashbutton.digicelgroup.com/oauth/token",
+        "https://moncashbutton.digicelgroup.com/Api/oauth/token"
+    ];
+
+    for (const url of urls) {
+        for (const scope of scopes) {
+            try {
+                const data = qs.stringify({ grant_type: 'client_credentials', scope });
+                const resp = await axios.post(url, data, {
+                    headers: {
+                        'Authorization': `Basic ${authString}`,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'User-Agent': 'Mozilla/5.0'
+                    },
+                    timeout: 5000
+                });
+                results.push({ url, scope, status: resp.status, data: resp.data });
+            } catch (e) {
+                results.push({ url, scope, status: e.response?.status || 'ERROR', error: e.response?.data || e.message });
+            }
+        }
+    }
+    res.json({ config: { mode: MONCASH_MODE, id_len: CLIENT_ID.length, secret_len: CLIENT_SECRET.length }, results });
+});
+
 app.post('/webhook', (req, res) => {
     console.log("Notification MonCash reçue :", req.body);
     res.status(200).send("OK");
