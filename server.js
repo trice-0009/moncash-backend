@@ -172,6 +172,37 @@ setInterval(() => {
     https.get(RENDER_EXTERNAL_URL, (res) => {}).on('error', (e) => {});
 }, 10 * 60 * 1000);
 
+app.get('/test-pay', async (req, res) => {
+    try {
+        const tokenData = await getAccessToken();
+        const accessToken = tokenData.access_token;
+        const orderId = "TEST_" + Date.now();
+        const amount = 10;
+        
+        const combinations = [
+            { url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount, orderId } },
+            { url: `${BASE_DOMAIN}/v1/CreatePayment`, payload: { amount, orderId } },
+            { url: "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment", payload: { amount, orderId } }
+        ];
+
+        const results = [];
+        for (const item of combinations) {
+            try {
+                const resp = await axios.post(item.url, item.payload, {
+                    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                    timeout: 10000
+                });
+                results.push({ url: item.url, status: resp.status, data: resp.data });
+            } catch (e) {
+                results.push({ url: item.url, status: e.response?.status || 'ERROR', error: e.response?.data || e.message });
+            }
+        }
+        res.json({ accessToken: accessToken.substring(0, 10) + "...", results });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Serveur MonCash actif sur le port ${PORT}`));
 
