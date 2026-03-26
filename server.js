@@ -19,7 +19,7 @@ const MONCASH_MODE = (process.env.MONCASH_MODE || "sandbox").toLowerCase();
 const IS_PRODUCTION = MONCASH_MODE === "live" || MONCASH_MODE === "production";
 const BASE_DOMAIN = IS_PRODUCTION 
     ? "https://moncashbutton.digicelgroup.com" 
-    : "https://sandbox.moncashbutton.digicelgroup.com";
+    : "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware";
 
 // URLs de base pour les appels API
 const BASE_URL_API = BASE_DOMAIN;
@@ -42,8 +42,10 @@ async function getAccessToken() {
     params.append('scope', 'read write'); 
     
     try {
-        // L'endpoint OAuth est généralement direct sous le domaine
-        const response = await axios.post(`${BASE_DOMAIN}/oauth/token`, params, {
+        const url = `${BASE_DOMAIN}/oauth/token`;
+        console.log(`Appel OAuth: ${url} (Mode: ${MONCASH_MODE})`);
+        
+        const response = await axios.post(url, params, {
             headers: {
                 'Authorization': `Basic ${authString}`,
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -55,8 +57,9 @@ async function getAccessToken() {
     } catch (error) {
         // Fallback: Si direct échoue, essayer avec /Api (certains environnements sandbox anciens)
         if (error.response?.status === 404) {
-             console.log("Tentative de repli (fallback) sur /Api/oauth/token...");
-             const response = await axios.post(`${BASE_DOMAIN}/Api/oauth/token`, params, {
+             const fallbackUrl = `${BASE_DOMAIN}/Api/oauth/token`;
+             console.log(`Repli sur fallback: ${fallbackUrl}`);
+             const response = await axios.post(fallbackUrl, params, {
                 headers: {
                     'Authorization': `Basic ${authString}`,
                     'Content-Type': 'application/x-www-form-urlencoded',
