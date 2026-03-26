@@ -14,6 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- CONFIGURATION MONCASH ---
 const CLIENT_ID = (process.env.MONCASH_CLIENT_ID || "").trim();
 const CLIENT_SECRET = (process.env.MONCASH_CLIENT_SECRET || "").trim();
+const MONCASH_ACCOUNT = (process.env.MONCASH_ACCOUNT || "").trim();
 const MONCASH_MODE = (process.env.MONCASH_MODE || "sandbox").toLowerCase();
 
 const IS_PRODUCTION = MONCASH_MODE === "live" || MONCASH_MODE === "production";
@@ -75,16 +76,23 @@ app.post('/createpayment', async (req, res) => {
         // On essaie les deux versions possibles de l'API MonCash (New vs Legacy)
         let paymentResponse;
         try {
+            // Version Legacy (Merchant API / Sandbox habituelle)
+            // Attend "reference" au lieu de "orderId", et nécessite le champ "account" (numéro marchand)
             paymentResponse = await axios.post(
                 `${BASE_DOMAIN}/V1/InitiatePayment`,
-                { amount: parseFloat(amount), orderId: orderId.toString() },
+                { 
+                    amount: parseFloat(amount), 
+                    reference: orderId.toString(),
+                    account: MONCASH_ACCOUNT 
+                },
                 {
                     headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                     timeout: 30000
                 }
             );
         } catch (e) {
-            if (e.response?.status === 404) {
+            if (e.response?.status === 404 || e.response?.status === 400) {
+                console.log("Tentative de repli sur v1/CreatePayment...");
                 paymentResponse = await axios.post(
                     `${BASE_DOMAIN}/v1/CreatePayment`,
                     { amount: parseFloat(amount), orderId: orderId.toString() },
@@ -177,12 +185,11 @@ app.get('/test-pay', async (req, res) => {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
         const orderId = "TEST_" + Date.now();
-        const amount = 10;
         
         const combinations = [
-            { url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount, orderId } },
-            { url: `${BASE_DOMAIN}/v1/CreatePayment`, payload: { amount, orderId } },
-            { url: "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment", payload: { amount, orderId } }
+            { name: "Merchant API (ref+acc)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, reference: orderId, account: MONCASH_ACCOUNT } },
+            { name: "Merchant API (ref only)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, reference: orderId } },
+            { name: "Merchant API (ordId only)", url: `${BASE_DOMAIN}/V1/InitiatePayment`, payload: { amount: 10, orderId } }
         ];
 
         const results = [];
@@ -192,12 +199,12 @@ app.get('/test-pay', async (req, res) => {
                     headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                     timeout: 10000
                 });
-                results.push({ url: item.url, status: resp.status, data: resp.data });
+                results.push({ name: item.name, status: resp.status, data: resp.data });
             } catch (e) {
-                results.push({ url: item.url, status: e.response?.status || 'ERROR', error: e.response?.data || e.message });
+                results.push({ name: item.name, error: e.response?.data || e.message });
             }
         }
-        res.json({ accessToken: accessToken.substring(0, 10) + "...", results });
+        res.json({ accountUsed: MONCASH_ACCOUNT, results });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
