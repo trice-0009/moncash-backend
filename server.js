@@ -13,37 +13,49 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const CLIENT_ID = "21706f2f287c9aa32059dce31524df55";
 const CLIENT_SECRET = "ILCKYtja_-SBWUU1hq3m_5ohG3PrrE_KzG8TjQjCO6-GdR8DKfJuc42HiNVzzwCV";
-// Utilisation du chemin REST API officiel (/Api) pour éviter l'erreur 403
-const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/Api";
+// Utilisation de la Merchant API pour les paiements directs
+const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi";
 
 async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     const params = new URLSearchParams();
     params.append('scope', 'read,write');
     params.append('grant_type', 'client_credentials');
+    
+    // Note: Utilisation du endpoint spécifique MerchantApi pour le token
     const response = await axios.post(`${BASE_URL}/oauth/token`, params, {
         headers: {
             'Authorization': `Basic ${authString}`,
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
         },
         timeout: 30000
     });
     return response.data.access_token;
 }
 
+/**
+ * Endpoint de création de paiement direct (Merchant API)
+ * Reçoit : { amount, orderId, account }
+ */
 app.post('/createpayment', async (req, res) => {
     try {
-        const { amount, orderId } = req.body;
-        if (!amount || !orderId) {
-            return res.status(400).json({ error: "Montant ou orderId manquant." });
+        const { amount, orderId, account } = req.body;
+        if (!amount || !orderId || !account) {
+            return res.status(400).json({ error: "Montant, orderId ou compte MonCash manquant." });
         }
 
-        const cleanOrderId = orderId.toString().replace(/[^a-zA-Z0-9_]/g, '').substring(0, 50);
-
         const token = await getAccessToken();
+        
+        // Appel à l'API Payment (V1) de la Merchant API
+        // Cette API initie une demande de confirmation sur le téléphone de l'utilisateur
         const paymentResponse = await axios.post(
-            `${BASE_URL}/v1/CreatePayment`,
-            { amount: parseInt(amount), orderId: cleanOrderId },
+            `${BASE_URL}/V1/Payment`,
+            { 
+                amount: parseFloat(amount), 
+                reference: orderId.toString(),
+                account: account.toString() 
+            },
             {
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -52,16 +64,19 @@ app.post('/createpayment', async (req, res) => {
                 timeout: 30000
             }
         );
+
+        // La réponse contient le statut de la transaction (souvent "pending" ou "successful")
         return res.status(200).json({
             success: true,
-            paymentToken: paymentResponse.data.payment_token.token,
-            redirectUrl: `${BASE_URL}/Payment/Redirect?token=${paymentResponse.data.payment_token.token}`
+            status: paymentResponse.data.message,
+            transactionId: paymentResponse.data.transactionId,
+            details: paymentResponse.data
         });
     } catch (error) {
         const details = error.response?.data || error.message;
-        console.error("Erreur createpayment:", JSON.stringify(details));
+        console.error("Erreur Merchant Payment:", JSON.stringify(details));
         return res.status(500).json({
-            error: "Erreur creation paiement.",
+            error: "Erreur lors de l'initiation du paiement.",
             details: details
         });
     }
@@ -73,8 +88,8 @@ app.get('/verifypayment', async (req, res) => {
         if (!orderId) return res.status(400).json({ error: "orderId manquant." });
         const token = await getAccessToken();
         const verifyResponse = await axios.post(
-            `${BASE_URL}/v1/RetrieveOrderPayment`,
-            { orderId: orderId.toString() },
+            `${BASE_URL}/V1/CheckPayment`,
+            { reference: orderId.toString() },
             {
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -83,12 +98,11 @@ app.get('/verifypayment', async (req, res) => {
                 timeout: 30000
             }
         );
-        const p = verifyResponse.data.payment;
         return res.status(200).json({
             success: true,
-            status: p.message,
-            transactionId: p.transaction_id,
-            reference: p.reference
+            status: verifyResponse.data.message,
+            transactionId: verifyResponse.data.transactionId,
+            reference: verifyResponse.data.reference
         });
     } catch (error) {
         const details = error.response?.data || error.message;
@@ -108,4 +122,4 @@ setInterval(() => {
 }, 10 * 60 * 1000); // 10 minutes
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Serveur MonCash actif sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`Serveur Unified Merchant MonCash actif sur le port ${PORT}`));
