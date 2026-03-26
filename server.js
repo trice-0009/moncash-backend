@@ -11,19 +11,27 @@ app.use(express.json());
 // Servir les fichiers statiques (le mini-site) depuis le dossier 'public'
 app.use(express.static(path.join(__dirname, 'public')));
 
-const CLIENT_ID = "21706f2f287c9aa32059dce31524df55";
-const CLIENT_SECRET = "ILCKYtja_-SBWUU1hq3m_5ohG3PrrE_KzG8TjQjCO6-GdR8DKfJuc42HiNVzzwCV";
-// Utilisation de la Merchant API pour les paiements directs
-const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi";
+// Remplacez ces valeurs par vos clés de PRODUCTION sur Render (Dashboard -> Environment)
+const CLIENT_ID = process.env.MONCASH_CLIENT_ID || "21706f2f287c9aa32059dce31524df55"; // Sandbox par défaut
+const CLIENT_SECRET = process.env.MONCASH_CLIENT_SECRET || "ILCKYtja_-SBWUU1hq3m_5ohG3PrrE_KzG8TjQjCO6-GdR8DKfJuc42HiNVzzwCV"; // Sandbox par défaut
+
+// URLs MonCash (Décommentez la version PRODUCTION quand vous êtes prêt)
+// const BASE_URL_TOKEN = "https://moncashbutton.digicelgroup.com/MerChantApi";
+// const BASE_URL_API = "https://moncashbutton.digicelgroup.com/Api";
+// const BASE_URL_REDIRECT = "https://moncashbutton.digicelgroup.com/Moncash-middleware";
+
+const BASE_URL_TOKEN = "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi";
+const BASE_URL_API = "https://sandbox.moncashbutton.digicelgroup.com/Api";
+const BASE_URL_REDIRECT = "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware";
 
 async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     
     const params = new URLSearchParams();
     params.append('grant_type', 'client_credentials');
-    params.append('scope', 'read write'); // 🔥 Scope requis par MonCash
+    params.append('scope', 'read write');
     
-    const response = await axios.post(`${BASE_URL}/oauth/token`, params, {
+    const response = await axios.post(`${BASE_URL_TOKEN}/oauth/token`, params, {
         headers: {
             'Authorization': `Basic ${authString}`,
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -53,9 +61,8 @@ app.post('/createpayment', async (req, res) => {
         const accessToken = tokenData.access_token;
         
         // Appel à l'API v1/CreatePayment (Redirection)
-        // Note: On utilise le token de MerChantApi qui est valide pour tout le portail
         const paymentResponse = await axios.post(
-            `https://sandbox.moncashbutton.digicelgroup.com/Api/v1/CreatePayment`,
+            `${BASE_URL_API}/v1/CreatePayment`,
             { 
                 amount: parseFloat(amount), 
                 orderId: orderId.toString()
@@ -71,7 +78,7 @@ app.post('/createpayment', async (req, res) => {
 
         // Construction de l'URL de redirection
         const paymentToken = paymentResponse.data.payment_token;
-        const redirectUrl = `https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/Payment/Redirect?token=${paymentToken}`;
+        const redirectUrl = `${BASE_URL_REDIRECT}/Payment/Redirect?token=${paymentToken}`;
 
         return res.status(200).json({
             success: true,
@@ -98,7 +105,7 @@ app.get('/verifypayment', async (req, res) => {
         const accessToken = tokenData.access_token;
 
         const verifyResponse = await axios.post(
-            `${BASE_URL}/V1/CheckPayment`,
+            `${BASE_URL_API}/V1/CheckPayment`,
             { reference: orderId.toString() },
             {
                 headers: {
@@ -119,6 +126,29 @@ app.get('/verifypayment', async (req, res) => {
         console.error("Erreur verifypayment:", JSON.stringify(details));
         return res.status(500).json({ error: "Erreur verification.", details: details });
     }
+});
+
+/**
+ * Endpoint de Notification (Webhook / Return URL)
+ * Appelé par MonCash après un paiement réussi
+ */
+app.post('/webhook', (req, res) => {
+    console.log("Notification MonCash reçue :", req.body);
+    // Ici, vous pourriez enregistrer le paiement en base de données
+    res.status(200).send("OK");
+});
+
+/**
+ * Page de succès (Alert URL)
+ * Redirigée par MonCash pour dire merci au client
+ */
+app.get('/success', (req, res) => {
+    res.send(`
+        <div style="text-align:center; padding:50px; font-family:sans-serif;">
+            <h1 style="color:#2f855a;">Paiement Réussi !</h1>
+            <p>Merci pour votre achat. Vous pouvez retourner dans l'application.</p>
+        </div>
+    `);
 });
 
 // Automatisation : Keep-alive every 10 minutes to prevent Render sleep
