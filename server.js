@@ -8,7 +8,7 @@ app.use(express.json());
 
 const CLIENT_ID = "21706f2f287c9aa32059dce31524df55";
 const CLIENT_SECRET = "ILCKYtja_-SBWUU1hq3m_5ohG3PrrE_KzG8TjQjCO6-GdR8DKfJuc42HiNVzzwCV";
-const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware";
+const BASE_URL = "https://sandbox.moncashbutton.digicelgroup.com/Api";
 
 async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
