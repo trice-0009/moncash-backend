@@ -33,37 +33,40 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
     console.log(`URL de base : ${BASE_DOMAIN}`);
 }
 
+const qs = require('querystring');
+
 async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     
-    // Le scope doit être séparé par un espace "read write" pour la nouvelle API
-    const params = new URLSearchParams();
-    params.append('grant_type', 'client_credentials');
-    params.append('scope', 'read write'); 
+    // Utilisation de querystring pour s'assurer de l'encodage strict
+    const data = qs.stringify({
+        grant_type: 'client_credentials',
+        scope: 'read write'
+    });
     
     try {
         const url = `${BASE_DOMAIN}/oauth/token`;
-        console.log(`Appel OAuth: ${url} (Mode: ${MONCASH_MODE})`);
+        console.log(`ID: ${CLIENT_ID.substring(0, 4)}... (len: ${CLIENT_ID.length}), Secret: (len: ${CLIENT_SECRET.length})`);
+        console.log(`Appel OAuth: ${url}`);
         
-        const response = await axios.post(url, params, {
+        const response = await axios.post(url, data, {
             headers: {
                 'Authorization': `Basic ${authString}`,
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json'
+                'User-Agent': 'MonCash-Node-Client/1.0'
             },
             timeout: 30000
         });
         return response.data;
     } catch (error) {
-        // Fallback: Si direct échoue, essayer avec /Api (certains environnements sandbox anciens)
         if (error.response?.status === 404) {
              const fallbackUrl = `${BASE_DOMAIN}/Api/oauth/token`;
              console.log(`Repli sur fallback: ${fallbackUrl}`);
-             const response = await axios.post(fallbackUrl, params, {
+             const response = await axios.post(fallbackUrl, data, {
                 headers: {
                     'Authorization': `Basic ${authString}`,
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Accept': 'application/json'
+                    'User-Agent': 'MonCash-Node-Client/1.0'
                 },
                 timeout: 30000
             });
