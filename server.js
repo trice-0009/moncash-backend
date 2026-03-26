@@ -35,14 +35,14 @@ async function getAccessToken() {
 }
 
 /**
- * Endpoint de création de paiement direct (Merchant API)
- * Reçoit : { amount, orderId, account }
+ * Endpoint de création de paiement (Méthode Redirection / Legacy)
+ * Reçoit : { amount, orderId }
  */
 app.post('/createpayment', async (req, res) => {
     try {
-        const { amount, orderId, account } = req.body;
-        if (!amount || !orderId || !account) {
-            return res.status(400).json({ error: "Montant, orderId ou compte MonCash manquant." });
+        const { amount, orderId } = req.body;
+        if (!amount || !orderId) {
+            return res.status(400).json({ error: "Montant ou orderId manquant." });
         }
 
         const tokenData = await getAccessToken();
@@ -52,13 +52,13 @@ app.post('/createpayment', async (req, res) => {
         
         const accessToken = tokenData.access_token;
         
-        // Appel à l'API InitiatePayment (V1) de la Merchant API
+        // Appel à l'API v1/CreatePayment (Redirection)
+        // Note: On utilise le token de MerChantApi qui est valide pour tout le portail
         const paymentResponse = await axios.post(
-            `${BASE_URL}/V1/InitiatePayment`,
+            `https://sandbox.moncashbutton.digicelgroup.com/Api/v1/CreatePayment`,
             { 
                 amount: parseFloat(amount), 
-                reference: orderId.toString(),
-                account: account.toString() 
+                orderId: orderId.toString()
             },
             {
                 headers: {
@@ -69,17 +69,21 @@ app.post('/createpayment', async (req, res) => {
             }
         );
 
+        // Construction de l'URL de redirection
+        const paymentToken = paymentResponse.data.payment_token;
+        const redirectUrl = `https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/Payment/Redirect?token=${paymentToken}`;
+
         return res.status(200).json({
             success: true,
-            status: paymentResponse.data.message,
-            transactionId: paymentResponse.data.transactionId,
+            redirect_url: redirectUrl,
+            payment_token: paymentToken,
             details: paymentResponse.data
         });
     } catch (error) {
         const details = error.response?.data || error.message;
-        console.error("Erreur Merchant Payment:", JSON.stringify(details));
+        console.error("Erreur CreatePayment:", JSON.stringify(details));
         return res.status(500).json({
-            error: "Erreur lors de l'initiation du paiement.",
+            error: "Erreur lors de la création du paiement MonCash.",
             details: details
         });
     }
