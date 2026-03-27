@@ -43,7 +43,7 @@ async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     const data = qs.stringify({
         grant_type: 'client_credentials',
-        scope: 'read write'
+        scope: 'read,write'
     });
 
     try {
@@ -119,14 +119,14 @@ app.get('/verifypayment', async (req, res) => {
             { transactionId: "", orderId: orderId.toString() },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                timeout: 30000
+                timeout: 60000 // 60 seconds
             }
         ).catch(() => axios.post(
             `${BASE_DOMAIN}/V1/CheckPayment`,
             { reference: orderId.toString() },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                timeout: 30000
+                timeout: 60000 // 60 seconds
             }
         ));
 
@@ -171,6 +171,7 @@ app.get('/test-pay-ultra', async (req, res) => {
         const orderId = "U_" + Math.floor(Math.random() * 1000000);
 
         const urls = [
+            `${BASE_DOMAIN}/v1/CreatePayment`,
             `${BASE_DOMAIN}/V1/InitiatePayment`,
             "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment"
         ];
@@ -195,7 +196,7 @@ app.get('/test-pay-ultra', async (req, res) => {
                                 const payload = { [key]: orderId, amount: amt, account: acc };
                                 const resp = await axios.post(url, payload, {
                                     headers: { ...auth, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                                    timeout: 30000 // 30 seconds for test loop
+                                    timeout: 60000 // 60 seconds for test loop
                                 });
                                 results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: resp.status, data: resp.data });
                             } catch (e) {
