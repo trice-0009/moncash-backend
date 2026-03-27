@@ -22,7 +22,7 @@ const IS_PRODUCTION = MONCASH_MODE === "live" || MONCASH_MODE === "production";
 // BASE_DOMAIN est configuré selon le mode détecté (Le diagnostic a confirmé MerChantApi pour le Sandbox)
 const BASE_DOMAIN = IS_PRODUCTION 
     ? "https://moncashbutton.digicelgroup.com/Api" 
-    : "https://sandbox.moncashbutton.digicelgroup.com/MerChantApi";
+    : "https://sandbox.moncashbutton.digicelgroup.com/Api";
 
 const BASE_URL_REDIRECT = IS_PRODUCTION
     ? "https://moncashbutton.digicelgroup.com/Moncash-middleware"
@@ -74,36 +74,18 @@ app.post('/createpayment', async (req, res) => {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
         
-        // On essaie les deux versions possibles de l'API MonCash (New vs Legacy)
-        let paymentResponse;
-        try {
-            // Version Legacy (Merchant API / Sandbox habituelle)
-            // Attend "reference" au lieu de "orderId", et nécessite le champ "account" (numéro marchand)
-            paymentResponse = await axios.post(
-                `${BASE_DOMAIN}/V1/InitiatePayment`,
-                { 
-                    amount: parseFloat(amount), 
-                    reference: orderId.toString(),
-                    account: MONCASH_ACCOUNT 
+        const paymentResponse = await axios.post(
+            `${BASE_DOMAIN}/v1/CreatePayment`,
+            { amount: parseFloat(amount), orderId: orderId.toString() },
+            {
+                headers: { 
+                    'Authorization': `Bearer ${accessToken}`, 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
-                {
-                    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                    timeout: 30000
-                }
-            );
-        } catch (e) {
-            if (e.response?.status === 404 || e.response?.status === 400) {
-                console.log("Tentative de repli sur v1/CreatePayment...");
-                paymentResponse = await axios.post(
-                    `${BASE_DOMAIN}/v1/CreatePayment`,
-                    { amount: parseFloat(amount), orderId: orderId.toString() },
-                    {
-                        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                        timeout: 30000
-                    }
-                );
-            } else { throw e; }
-        }
+                timeout: 30000
+            }
+        );
 
         // Extraction robuste du token (objet ou string selon API)
         const pToken = paymentResponse.data.payment_token;
