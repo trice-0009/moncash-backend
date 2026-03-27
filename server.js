@@ -81,16 +81,20 @@ app.post('/createpayment', async (req, res) => {
 
         console.log(`Appel CreatePayment pour ${amount} HTG (orderId: ${orderId})...`);
         const startTime = Date.now();
+        // S'assurer que orderId est uniquement numérique (certains sandbox n'aiment pas les préfixes)
+        const cleanOrderId = orderId.toString().replace(/\D/g, "") || Date.now().toString();
+
         const paymentResponse = await axios.post(
             `${BASE_DOMAIN}/v1/CreatePayment`,
-            { amount: parseFloat(amount), orderId: orderId.toString() },
+            { amount: parseFloat(amount), orderId: cleanOrderId },
             {
                 headers: { 
                     'Authorization': `Bearer ${accessToken}`, 
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+                    'Accept': 'application/json',
+                    'User-Agent': 'MonCash-Node-Client'
                 },
-                timeout: 120000 // 120 seconds
+                timeout: 180000 // 180 seconds (3 minutes) - MonCash Sandbox is very slow
             }
         );
         const duration = (Date.now() - startTime) / 1000;
