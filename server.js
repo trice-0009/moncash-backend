@@ -42,7 +42,7 @@ async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     const data = qs.stringify({
         grant_type: 'client_credentials',
-        scope: 'read write'
+        scope: 'read,write'
     });
     
     try {
@@ -170,6 +170,7 @@ app.get('/test-pay-ultra', async (req, res) => {
         const orderId = "U_" + Math.floor(Math.random() * 1000000);
         
         const urls = [
+            `${BASE_DOMAIN}/v1/CreatePayment`,
             `${BASE_DOMAIN}/V1/InitiatePayment`,
             "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment"
         ];
