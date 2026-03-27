@@ -40,24 +40,28 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 const qs = require('querystring');
 
 async function getAccessToken() {
-    const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+    console.log("Démarrage getAccessToken...");
+    const authString = Buffer.from(`${CLIENT_ID.trim()}:${CLIENT_SECRET.trim()}`).toString('base64');
     const data = qs.stringify({
         grant_type: 'client_credentials',
         scope: 'read,write'
     });
 
     try {
+        console.log(`Appel OAuth sur ${BASE_DOMAIN}/oauth/token...`);
         const response = await axios.post(`${BASE_DOMAIN}/oauth/token`, data, {
             headers: {
                 'Authorization': `Basic ${authString}`,
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'User-Agent': 'MonCash-Node-Client'
             },
-            timeout: 60000 // 60 seconds
+            timeout: 90000 
         });
+        const token = response.data.access_token;
+        console.log(`Token obtenu avec succès (longueur: ${token ? token.length : 0})`);
         return response.data;
     } catch (error) {
-        console.error("Erreur Auth:", error.response?.data || error.message);
+        console.error("Erreur Auth détaillée:", error.response?.data || error.message);
         throw error;
     }
 }
@@ -75,6 +79,8 @@ app.post('/createpayment', async (req, res) => {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
 
+        console.log(`Appel CreatePayment pour ${amount} HTG (orderId: ${orderId})...`);
+        const startTime = Date.now();
         const paymentResponse = await axios.post(
             `${BASE_DOMAIN}/v1/CreatePayment`,
             { amount: parseFloat(amount), orderId: orderId.toString() },
@@ -84,9 +90,11 @@ app.post('/createpayment', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                timeout: 60000 // 60 seconds
+                timeout: 120000 // 120 seconds
             }
         );
+        const duration = (Date.now() - startTime) / 1000;
+        console.log(`Réponse CreatePayment reçue en ${duration}s !`);
 
         // Extraction robuste du token (objet ou string selon API)
         const pToken = paymentResponse.data.payment_token;
@@ -196,7 +204,7 @@ app.get('/test-pay-ultra', async (req, res) => {
                                 const payload = { [key]: orderId, amount: amt, account: acc };
                                 const resp = await axios.post(url, payload, {
                                     headers: { ...auth, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                                    timeout: 60000 // 60 seconds for test loop
+                                    timeout: 90000 // 90 seconds for test loop
                                 });
                                 results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: resp.status, data: resp.data });
                             } catch (e) {
@@ -210,7 +218,11 @@ app.get('/test-pay-ultra', async (req, res) => {
                 }
             }
         }
-        res.json({ results: results.slice(0, 100) });
+        res.json({ 
+            version: "V_90S_DIAG",
+            timestamp: new Date().toISOString(),
+            results: results.slice(0, 100) 
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
