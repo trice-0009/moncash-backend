@@ -20,8 +20,8 @@ const MONCASH_MODE = (process.env.MONCASH_MODE || "sandbox").toLowerCase();
 const IS_PRODUCTION = MONCASH_MODE === "live" || MONCASH_MODE === "production";
 
 // BASE_DOMAIN est configuré selon le mode détecté (Le diagnostic a confirmé MerChantApi pour le Sandbox)
-const BASE_DOMAIN = IS_PRODUCTION 
-    ? "https://moncashbutton.digicelgroup.com/Api" 
+const BASE_DOMAIN = IS_PRODUCTION
+    ? "https://moncashbutton.digicelgroup.com/Api"
     : "https://sandbox.moncashbutton.digicelgroup.com/Api";
 
 const BASE_URL_REDIRECT = IS_PRODUCTION
@@ -33,6 +33,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
     console.error("ERREUR CRITIQUE : MONCASH_CLIENT_ID ou MONCASH_CLIENT_SECRET manquant sur Render !");
 } else {
     console.log(`Serveur MonCash initialisé en mode ${MONCASH_MODE.toUpperCase()}`);
+    console.log(`CLIENT_ID : ${CLIENT_ID ? CLIENT_ID.substring(0, 5) + '...' : 'MANQUANT'}`);
     console.log(`Compte configuré : ${MONCASH_ACCOUNT ? MONCASH_ACCOUNT.substring(0, 5) + '...' : 'AUCUN'}`);
 }
 
@@ -42,9 +43,9 @@ async function getAccessToken() {
     const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     const data = qs.stringify({
         grant_type: 'client_credentials',
-        scope: 'read,write'
+        scope: 'read write'
     });
-    
+
     try {
         const response = await axios.post(`${BASE_DOMAIN}/oauth/token`, data, {
             headers: {
@@ -52,7 +53,7 @@ async function getAccessToken() {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'User-Agent': 'MonCash-Node-Client'
             },
-            timeout: 30000
+            timeout: 60000 // 60 seconds
         });
         return response.data;
     } catch (error) {
@@ -73,7 +74,7 @@ app.post('/createpayment', async (req, res) => {
 
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
-        
+
         const paymentResponse = await axios.post(
             `${BASE_DOMAIN}/v1/CreatePayment`,
             { amount: parseFloat(amount), orderId: orderId.toString() },
@@ -83,14 +84,14 @@ app.post('/createpayment', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                timeout: 30000
+                timeout: 60000 // 60 seconds
             }
         );
 
         // Extraction robuste du token (objet ou string selon API)
         const pToken = paymentResponse.data.payment_token;
         const tokenString = (typeof pToken === 'object') ? pToken.token : pToken;
-        
+
         const redirectUrl = `${BASE_URL_REDIRECT}/Payment/Redirect?token=${tokenString}`;
 
         return res.status(200).json({
@@ -109,7 +110,7 @@ app.get('/verifypayment', async (req, res) => {
     try {
         const { orderId } = req.query;
         if (!orderId) return res.status(400).json({ error: "orderId manquant." });
-        
+
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
 
@@ -130,7 +131,7 @@ app.get('/verifypayment', async (req, res) => {
         ));
 
         const paymentData = verifyResponse.data.payment || verifyResponse.data;
-        
+
         return res.status(200).json({
             success: true,
             status: paymentData.message || "inconnu",
@@ -160,7 +161,7 @@ app.get('/success', (req, res) => {
 
 const RENDER_EXTERNAL_URL = "https://moncash-backend-5ez9.onrender.com";
 setInterval(() => {
-    https.get(RENDER_EXTERNAL_URL, (res) => {}).on('error', (e) => {});
+    https.get(RENDER_EXTERNAL_URL, (res) => { }).on('error', (e) => { });
 }, 10 * 60 * 1000);
 
 app.get('/test-pay-ultra', async (req, res) => {
@@ -168,13 +169,12 @@ app.get('/test-pay-ultra', async (req, res) => {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
         const orderId = "U_" + Math.floor(Math.random() * 1000000);
-        
+
         const urls = [
-            `${BASE_DOMAIN}/v1/CreatePayment`,
             `${BASE_DOMAIN}/V1/InitiatePayment`,
             "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment"
         ];
-        
+
         const authHeaders = [
             { 'Authorization': `Bearer ${accessToken}` },
             { 'Authorization': accessToken },
@@ -195,7 +195,7 @@ app.get('/test-pay-ultra', async (req, res) => {
                                 const payload = { [key]: orderId, amount: amt, account: acc };
                                 const resp = await axios.post(url, payload, {
                                     headers: { ...auth, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                                    timeout: 3000
+                                    timeout: 30000 // 30 seconds for test loop
                                 });
                                 results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: resp.status, data: resp.data });
                             } catch (e) {
