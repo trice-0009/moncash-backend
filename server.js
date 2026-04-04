@@ -8,6 +8,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- CONFIGURATION FIREBASE ---
+const admin = require('firebase-admin');
+let db = null;
+try {
+    const serviceAccount = require('./service-account.json');
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+    db = admin.firestore();
+    console.log("Firebase Admin initialisé avec succès.");
+} catch (e) {
+    console.error("ERREUR CRITIQUE Firebase Admin (Firestore désactivé) :", e.message);
+}
+
 // Servir les fichiers statiques (le mini-site) depuis le dossier 'public'
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -71,7 +85,7 @@ async function getAccessToken() {
  */
 app.post('/createpayment', async (req, res) => {
     try {
-        const { amount, orderId } = req.body;
+        const { amount, orderId, userId } = req.body;
         if (!amount || !orderId) {
             return res.status(400).json({ error: "Montant ou orderId manquant." });
         }
@@ -79,10 +93,25 @@ app.post('/createpayment', async (req, res) => {
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
 
-        console.log(`Appel CreatePayment pour ${amount} HTG (orderId: ${orderId})...`);
+        console.log(`Appel CreatePayment pour ${amount} HTG (orderId: ${orderId}, userId: ${userId || 'ANONYME'})...`);
         const startTime = Date.now();
-        // S'assurer que orderId est uniquement numérique (certains sandbox n'aiment pas les préfixes)
+        // S'assurer que orderId est uniquement numérique pour la compatibilité
         const cleanOrderId = orderId.toString().replace(/\D/g, "") || Date.now().toString();
+
+        // 1. Sauvegarder la trace du paiement dans Firestore si userId est présent
+        if (userId && db) {
+            try {
+                await db.collection('pending_payments').doc(cleanOrderId).set({
+                    userId: userId,
+                    amount: parseFloat(amount),
+                    status: 'pending',
+                    createdAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                console.log(`pending_payment enregistré pour orderId: ${cleanOrderId}`);
+            } catch (e) {
+                console.error("Erreur sauvegarde pending_payment:", e.message);
+            }
+        }
 
         const paymentResponse = await axios.post(
             `${BASE_DOMAIN}/v1/CreatePayment`,
@@ -123,19 +152,21 @@ app.get('/verifypayment', async (req, res) => {
         const { orderId } = req.query;
         if (!orderId) return res.status(400).json({ error: "orderId manquant." });
 
+        const cleanOrderId = orderId.toString().replace(/\D/g, "") || orderId.toString();
+
         const tokenData = await getAccessToken();
         const accessToken = tokenData.access_token;
 
         const verifyResponse = await axios.post(
             `${BASE_DOMAIN}/V1/RetrieveTransactionPayment`,
-            { transactionId: "", orderId: orderId.toString() },
+            { transactionId: "", orderId: cleanOrderId },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                 timeout: 60000 // 60 seconds
             }
         ).catch(() => axios.post(
             `${BASE_DOMAIN}/V1/CheckPayment`,
-            { reference: orderId.toString() },
+            { reference: cleanOrderId },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                 timeout: 60000 // 60 seconds
@@ -143,10 +174,40 @@ app.get('/verifypayment', async (req, res) => {
         ));
 
         const paymentData = verifyResponse.data.payment || verifyResponse.data;
+        const status = paymentData.message || "inconnu";
+
+        // 2. Si le paiement est réussi, mettre à jour le statut dans Firestore
+        if (status.toUpperCase() === "SUCCESSFUL" && db) {
+            try {
+                const pendingRef = db.collection('pending_payments').doc(cleanOrderId);
+                const doc = await pendingRef.get();
+
+                if (doc.exists) {
+                    const { userId } = doc.data();
+                    if (!userId) throw new Error("userId absent dans pending_payment");
+                    console.log(`Paiement réussi pour l'utilisateur : ${userId}`);
+
+                    // Mise à jour du statut Premium (merge pour ne pas écraser le profil)
+                    await db.collection('users').doc(userId).set({
+                        isPremium: true,
+                        lastPurchaseDate: admin.firestore.FieldValue.serverTimestamp(),
+                        lastTransactionId: paymentData.transaction_id || null
+                    }, { merge: true });
+
+                    // Marquer la transaction comme traitée
+                    await pendingRef.update({ status: 'completed' });
+                    console.log(`✅ Statut isPremium mis à jour pour ${userId}`);
+                } else {
+                    console.warn(`Aucun pending_payment trouvé pour orderId: ${cleanOrderId}`);
+                }
+            } catch (fsError) {
+                console.error("Erreur mise à jour Firestore post-paiement:", fsError.message);
+            }
+        }
 
         return res.status(200).json({
             success: true,
-            status: paymentData.message || "inconnu",
+            status: status,
             transactionId: paymentData.transaction_id,
             reference: paymentData.reference
         });
@@ -194,7 +255,7 @@ app.get('/test-pay-ultra', async (req, res) => {
             { 'X-MonCash-Token': accessToken }
         ];
 
-        const accounts = [MONCASH_ACCOUNT, MONCASH_ACCOUNT.replace('509', '')];
+        const accounts = MONCASH_ACCOUNT ? [MONCASH_ACCOUNT, MONCASH_ACCOUNT.replace('509', '')] : [''];
         const amounts = [10, "10", 10.0];
         const keys = ["reference", "orderId"];
 

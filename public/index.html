@@ -44,6 +44,7 @@
             const params = new URLSearchParams(window.location.search);
             const amount = params.get('amount') || 500; // 500 HTG par défaut pour le test
             const orderId = params.get('orderId') || ("ORD_" + Date.now());
+            const userId = params.get('userId'); // Récupéré depuis l'app Android
 
             // UI Update
             document.getElementById('pay-btn').style.display = 'none';
@@ -55,7 +56,7 @@
                 const response = await fetch(CREATE_PAYMENT_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount, orderId })
+                    body: JSON.stringify({ amount, orderId, userId })
                 });
 
                 const data = await response.json();
