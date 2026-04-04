@@ -157,12 +157,12 @@ app.get('/verifypayment', async (req, res) => {
     }
 });
 
-app.post('/webhook', (req, res) => {
+app.post('/webhookk', (req, res) => {
     console.log("Notification MonCash reçue :", req.body);
     res.status(200).send("OK");
 });
 
-app.get('/success', (req, res) => {
+app.get('/successs', (req, res) => {
     res.send(`
         <div style="text-align:center; padding:50px; font-family:sans-serif;">
             <h1 style="color:#2f855a;">Paiement Réussi !</h1>
