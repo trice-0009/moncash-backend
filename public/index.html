@@ -10,44 +10,59 @@
         .card { background: #fff; padding: 2.5rem 2rem; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,.05); text-align: center; max-width: 400px; width: 90%; }
         .logo-img { width: 100px; height: 100px; margin: 0 auto 1.5rem auto; display: block; border-radius: 50%; }
         .title { font-size: 1.25rem; font-weight: 700; color: #1a202c; margin-bottom: 0.5rem; }
-        .subtitle { color: #4a5568; font-size: .95rem; line-height: 1.6; margin-bottom: 2rem; }
-        .btn-pay { width: 100%; background-color: #1A3B8E; color: #fff; border: none; padding: 16px; border-radius: 12px; cursor: pointer; font-weight: 700; font-size: 1.1rem; transition: background 0.2s, transform 0.1s; display: flex; align-items: center; justify-content: center; gap: 10px; }
-        .btn-pay:hover { background-color: #12286b; }
-        .btn-pay:active { transform: scale(0.98); }
-        .mc-logo { width: 24px; height: 24px; }
-        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #1A3B8E; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
-        @keyframes spin { 0% { transform: rotate(0) } 100% { transform: rotate(360deg) } }
-        .error { color: #e53e3e; background-color: #fff5f5; padding: 1rem; border-radius: 8px; display: none; margin-top: 1.5rem; font-weight: 600; border: 1px solid #feb2b2; font-size: .85rem; text-align: left; word-break: break-all; }
-        #status-text { color: #718096; font-size: 0.9rem; margin-top: 1rem; display: none; }
+        .subtitle { color: #4a5568; font-size: .95rem; margin-bottom: 2rem; line-height: 1.5; }
+        .amount-box { background: #f7fafc; padding: 1.25rem; border-radius: 12px; margin-bottom: 2rem; }
+        .amount-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #718096; margin-bottom: 0.25rem; display: block; }
+        .amount-value { font-size: 1.75rem; font-weight: 700; color: #2d3748; }
+        .pay-btn { background: #d63384; color: #fff; border: none; padding: 1rem 2rem; border-radius: 12px; font-weight: 600; font-size: 1rem; cursor: pointer; transition: all 0.2s; width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; text-decoration: none; box-shadow: 0 4px 6px rgba(214, 51, 132, 0.2); }
+        .pay-btn:hover { background: #c22d76; transform: translateY(-1px); box-shadow: 0 6px 12px rgba(214, 51, 132, 0.3); }
+        .loader { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .error-banner { display: none; margin-top: 1rem; color: #e53e3e; background: #fff5f5; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; border: 1px solid #feb2b2; }
     </style>
 </head>
 <body>
     <div class="card">
-        <img src="logo.png" alt="Logo PNH Infos Plus" class="logo-img">
-        <h1 class="title">Paiement Sécurisé</h1>
-        <p class="subtitle">Cliquez sur le bouton ci-dessous pour payer via le portail officiel MonCash.</p>
+        <img src="logo.png" alt="PNH Infos Plus" class="logo-img">
+        <h1 class="title">PNH Infos Plus</h1>
+        <p class="subtitle">Activation du compte premium pour accéder à tous les contenus de préparation.</p>
         
-        <button class="btn-pay" id="pay-btn" onclick="startRedirectPayment()">
-            <img src="https://moncashbutton.digicelgroup.com/Moncash-middleware/resources/assets/images/MC_button.png" class="mc-logo" alt="">
-            Payer avec MonCash
+        <div class="amount-box">
+            <span class="amount-label">Montant à payer</span>
+            <span class="amount-value">250 HTG</span>
+        </div>
+
+        <button id="pay-btn" class="pay-btn" onclick="initiatePayment()">
+            <span>Payer avec MonCash</span>
+            <div id="loader" class="loader"></div>
         </button>
 
-        <div class="loader" id="loader"></div>
-        <p id="status-text">Préparation de la redirection...</p>
-        <p class="error" id="error-msg"></p>
+        <p id="status-text" style="display:none; color:#718096; font-size:0.85rem; margin-top:1rem;">Redirection vers MonCash...</p>
+        <div id="error-msg" class="error-banner"></div>
+
+        <footer style="margin-top: 2rem; border-top: 1px solid #edf2f7; padding-top: 1rem;">
+            <a href="privacy.html" style="color: #718096; font-size: 0.8rem; text-decoration: none; transition: color 0.2s;" onmouseover="this.style.color='#4a5568'" onmouseout="this.style.color='#718096'">
+                Politique de Confidentialité
+            </a>
+        </footer>
     </div>
 
     <script>
-        const CREATE_PAYMENT_URL = '/createpayment';
+        const CREATE_PAYMENT_URL = '/create-payment';
 
-        async function startRedirectPayment() {
+        async function initiatePayment() {
             const params = new URLSearchParams(window.location.search);
-            const amount = params.get('amount') || 500; // 500 HTG par défaut pour le test
-            const orderId = params.get('orderId') || ("ORD_" + Date.now());
-            const userId = params.get('userId'); // Récupéré depuis l'app Android
+            const userId = params.get('userId');
+            const amount = 250; 
+            const orderId = "PNH_" + Date.now();
 
-            // UI Update
-            document.getElementById('pay-btn').style.display = 'none';
+            if (!userId) {
+                showError("ID utilisateur manquant. Veuillez retourner dans l'application.");
+                return;
+            }
+
+            document.getElementById('pay-btn').style.pointerEvents = 'none';
+            document.getElementById('pay-btn').style.opacity = '0.8';
             document.getElementById('loader').style.display = 'block';
             document.getElementById('status-text').style.display = 'block';
             document.getElementById('error-msg').style.display = 'none';
@@ -62,7 +77,6 @@
                 const data = await response.json();
 
                 if (response.ok && data.success && data.redirect_url) {
-                    // Redirection vers le portail MonCash
                     window.location.href = data.redirect_url;
                 } else {
                     document.getElementById('loader').style.display = 'none';
@@ -82,6 +96,8 @@
             err.style.display = 'block';
             err.innerText = msg;
             document.getElementById('pay-btn').style.display = 'flex';
+            document.getElementById('pay-btn').style.pointerEvents = 'auto';
+            document.getElementById('pay-btn').style.opacity = '1';
         }
     </script>
 </body>
