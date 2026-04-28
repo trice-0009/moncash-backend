@@ -35,6 +35,12 @@
         <div class="loader" id="loader"></div>
         <p id="status-text">Préparation de la redirection...</p>
         <p class="error" id="error-msg"></p>
+
+        <footer style="margin-top: 2rem; border-top: 1px solid #edf2f7; padding-top: 1rem;">
+            <a href="privacy.html" style="color: #718096; font-size: 0.8rem; text-decoration: none; transition: color 0.2s;" onmouseover="this.style.color='#4a5568'" onmouseout="this.style.color='#718096'">
+                Politique de Confidentialité
+            </a>
+        </footer>
     </div>
 
     <script>
@@ -42,11 +48,10 @@
 
         async function startRedirectPayment() {
             const params = new URLSearchParams(window.location.search);
-            const amount = params.get('amount') || 500; // 500 HTG par défaut pour le test
+            const amount = params.get('amount') || 500; 
             const orderId = params.get('orderId') || ("ORD_" + Date.now());
-            const userId = params.get('userId'); // Récupéré depuis l'app Android
+            const userId = params.get('userId'); 
 
-            // UI Update
             document.getElementById('pay-btn').style.display = 'none';
             document.getElementById('loader').style.display = 'block';
             document.getElementById('status-text').style.display = 'block';
@@ -62,7 +67,6 @@
                 const data = await response.json();
 
                 if (response.ok && data.success && data.redirect_url) {
-                    // Redirection vers le portail MonCash
                     window.location.href = data.redirect_url;
                 } else {
                     document.getElementById('loader').style.display = 'none';
@@ -84,10 +88,5 @@
             document.getElementById('pay-btn').style.display = 'flex';
         }
     </script>
-    <footer style="margin-top: 2rem; border-top: 1px solid #edf2f7; padding-top: 1rem;">
-            <a href="privacy.html" style="color: #718096; font-size: 0.8rem; text-decoration: none; transition: color 0.2s;" onmouseover="this.style.color='#4a5568'" onmouseout="this.style.color='#718096'">
-                Politique de Confidentialité
-            </a>
-        </footer>
 </body>
 </html>
