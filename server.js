@@ -5,35 +5,41 @@ const path = require('path');
 const https = require('https');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-// --- CONFIGURATION FIREBASE ---
+// ─────────────────────────────────────────────
+//  CORS — autorise les appels depuis l'APK Android
+// ─────────────────────────────────────────────
+app.use(cors({
+    origin: '*',  // Restreindre à votre domaine en prod si besoin
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ─────────────────────────────────────────────
+//  FIREBASE ADMIN — initialisation sécurisée
+// ─────────────────────────────────────────────
 const admin = require('firebase-admin');
 let db = null;
 try {
     const serviceAccount = require('./service-account.json');
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     db = admin.firestore();
-    console.log("Firebase Admin initialisé avec succès.");
+    console.log("✅ Firebase Admin initialisé avec succès.");
 } catch (e) {
-    console.error("ERREUR CRITIQUE Firebase Admin (Firestore désactivé) :", e.message);
+    console.error("❌ ERREUR CRITIQUE Firebase Admin (Firestore désactivé) :", e.message);
 }
 
-// Servir les fichiers statiques (le mini-site) depuis le dossier 'public'
-app.use(express.static(path.join(__dirname, 'public')));
-
-// --- CONFIGURATION MONCASH ---
-const CLIENT_ID = (process.env.MONCASH_CLIENT_ID || "").trim();
+// ─────────────────────────────────────────────
+//  CONFIGURATION MONCASH
+// ─────────────────────────────────────────────
+const CLIENT_ID     = (process.env.MONCASH_CLIENT_ID     || "").trim();
 const CLIENT_SECRET = (process.env.MONCASH_CLIENT_SECRET || "").trim();
-const MONCASH_ACCOUNT = (process.env.MONCASH_ACCOUNT || "").trim();
-const MONCASH_MODE = (process.env.MONCASH_MODE || "sandbox").toLowerCase();
+const MONCASH_MODE  = (process.env.MONCASH_MODE          || "sandbox").toLowerCase();
 
 const IS_PRODUCTION = MONCASH_MODE === "live" || MONCASH_MODE === "production";
 
-// BASE_DOMAIN est configuré selon le mode détecté (Le diagnostic a confirmé MerChantApi pour le Sandbox)
 const BASE_DOMAIN = IS_PRODUCTION
     ? "https://moncashbutton.digicelgroup.com/Api"
     : "https://sandbox.moncashbutton.digicelgroup.com/Api";
@@ -42,94 +48,246 @@ const BASE_URL_REDIRECT = IS_PRODUCTION
     ? "https://moncashbutton.digicelgroup.com/Moncash-middleware"
     : "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware";
 
-// Vérification de sécurité
+// URL de ce serveur (utilisée pour la vérification auto depuis /successs)
+const SERVER_URL = (process.env.RENDER_EXTERNAL_URL || "https://moncash-backend-5ez9.onrender.com").trim();
+
 if (!CLIENT_ID || !CLIENT_SECRET) {
-    console.error("ERREUR CRITIQUE : MONCASH_CLIENT_ID ou MONCASH_CLIENT_SECRET manquant sur Render !");
+    console.error("❌ ERREUR CRITIQUE : MONCASH_CLIENT_ID ou MONCASH_CLIENT_SECRET manquant !");
 } else {
-    console.log(`Serveur MonCash initialisé en mode ${MONCASH_MODE.toUpperCase()}`);
-    console.log(`CLIENT_ID : ${CLIENT_ID ? CLIENT_ID.substring(0, 5) + '...' : 'MANQUANT'}`);
-    console.log(`Compte configuré : ${MONCASH_ACCOUNT ? MONCASH_ACCOUNT.substring(0, 5) + '...' : 'AUCUN'}`);
+    console.log(`ℹ️  Mode MonCash : ${MONCASH_MODE.toUpperCase()}`);
+    console.log(`ℹ️  CLIENT_ID   : ${CLIENT_ID.substring(0, 5)}...`);
 }
 
-const qs = require('querystring');
-
+// ─────────────────────────────────────────────
+//  HELPER — Obtenir un access token OAuth
+// ─────────────────────────────────────────────
 async function getAccessToken() {
-    console.log("Démarrage getAccessToken...");
-    const authString = Buffer.from(`${CLIENT_ID.trim()}:${CLIENT_SECRET.trim()}`).toString('base64');
-    const data = qs.stringify({
-        grant_type: 'client_credentials',
-        scope: 'read,write'
+    const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+    // URLSearchParams remplace querystring (déprécié depuis Node 16)
+    const data = new URLSearchParams({ grant_type: 'client_credentials', scope: 'read,write' }).toString();
+
+    console.log(`🔑 Obtention token OAuth → ${BASE_DOMAIN}/oauth/token`);
+    const response = await axios.post(`${BASE_DOMAIN}/oauth/token`, data, {
+        headers: {
+            'Authorization': `Basic ${authString}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'MonCash-Node-Client/2.0'
+        },
+        timeout: 90000
+    });
+    console.log(`✅ Token obtenu (longueur: ${response.data.access_token?.length || 0})`);
+    return response.data.access_token;
+}
+
+// ─────────────────────────────────────────────
+//  HELPER — Vérifier + Mettre à jour Firestore
+//  Centralisé pour être réutilisé par /verifypayment et /successs
+// ─────────────────────────────────────────────
+async function verifyAndUpdateFirestore(cleanOrderId) {
+    if (!db) {
+        console.warn("⚠️  Firestore désactivé — vérification ignorée.");
+        return { verified: false, reason: "Firestore non disponible" };
+    }
+
+    const accessToken = await getAccessToken();
+
+    // Tentative 1 : RetrieveTransactionPayment (API officielle)
+    let verifyResponse;
+    try {
+        verifyResponse = await axios.post(
+            `${BASE_DOMAIN}/V1/RetrieveTransactionPayment`,
+            { transactionId: "", orderId: cleanOrderId },
+            {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                timeout: 60000
+            }
+        );
+    } catch {
+        // Tentative 2 : CheckPayment (fallback)
+        verifyResponse = await axios.post(
+            `${BASE_DOMAIN}/V1/CheckPayment`,
+            { reference: cleanOrderId },
+            {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                timeout: 60000
+            }
+        );
+    }
+
+    const paymentData = verifyResponse.data.payment || verifyResponse.data;
+    const status = (paymentData.message || "inconnu").toUpperCase();
+    const transactionId = paymentData.transaction_id || null;
+
+    console.log(`📋 Statut paiement pour orderId ${cleanOrderId} : ${status}`);
+
+    if (status !== "SUCCESSFUL") {
+        return { verified: false, status, transactionId };
+    }
+
+    // ── Récupérer le pending_payment pour connaître userId et packName ──
+    const pendingRef = db.collection('pending_payments').doc(cleanOrderId);
+    const pendingDoc = await pendingRef.get();
+
+    if (!pendingDoc.exists) {
+        console.warn(`⚠️  Aucun pending_payment trouvé pour orderId: ${cleanOrderId}`);
+        return { verified: true, status, transactionId, reason: "pending_payment introuvable" };
+    }
+
+    const { userId, packName, status: currentStatus } = pendingDoc.data();
+
+    // ── Idempotence : ne pas traiter deux fois le même paiement ──
+    if (currentStatus === 'completed') {
+        console.log(`ℹ️  Paiement ${cleanOrderId} déjà traité — ignoré.`);
+        return { verified: true, status, transactionId, alreadyProcessed: true };
+    }
+
+    if (!userId) {
+        console.error(`❌ userId absent dans pending_payment pour orderId: ${cleanOrderId}`);
+        return { verified: true, status, transactionId, reason: "userId absent" };
+    }
+
+    // ── Écriture Firestore : chaque transaction = nouveau document unique ──
+    const batch = db.batch();
+    const userRef = db.collection('users').doc(userId);
+
+    // 1. Mise à jour du profil utilisateur (merge = ne jamais écraser)
+    batch.set(userRef, {
+        isPremium: true,
+        lastPurchaseDate: admin.firestore.FieldValue.serverTimestamp(),
+        lastTransactionId: transactionId
+    }, { merge: true });
+
+    // 2. Ajouter le pack dans downloadedPacks ET ownedPacks (APK)
+    if (packName) {
+        batch.update(userRef, {
+            downloadedPacks: admin.firestore.FieldValue.arrayUnion(packName),
+            ownedPacks:      admin.firestore.FieldValue.arrayUnion(packName)
+        });
+        console.log(`📦 Pack "${packName}" ajouté dans downloadedPacks + ownedPacks de ${userId}`);
+    } else {
+        console.warn(`⚠️  packName absent pour orderId ${cleanOrderId}`);
+    }
+
+    // 3. Sous-collection purchases — ID auto-généré = NOUVEAU document à chaque achat
+    //    (même pack acheté 2x → 2 documents distincts)
+    const purchaseRef = userRef.collection('purchases').doc(); // doc() sans ID = auto-ID
+    batch.set(purchaseRef, {
+        packName:        packName || null,
+        amount:          pendingDoc.data().amount || null,
+        transactionId:   transactionId,
+        orderId:         cleanOrderId,
+        originalOrderId: pendingDoc.data().originalOrderId || cleanOrderId,
+        purchasedAt:     admin.firestore.FieldValue.serverTimestamp()
     });
 
-    try {
-        console.log(`Appel OAuth sur ${BASE_DOMAIN}/oauth/token...`);
-        const response = await axios.post(`${BASE_DOMAIN}/oauth/token`, data, {
-            headers: {
-                'Authorization': `Basic ${authString}`,
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'MonCash-Node-Client'
-            },
-            timeout: 90000 
-        });
-        const token = response.data.access_token;
-        console.log(`Token obtenu avec succès (longueur: ${token ? token.length : 0})`);
-        return response.data;
-    } catch (error) {
-        console.error("Erreur Auth détaillée:", error.response?.data || error.message);
-        throw error;
-    }
+    // 4. Collection globale "transactions" — historique complet toutes opérations
+    //    ID auto-généré = chaque transaction est un nouveau document
+    const txRef = db.collection('transactions').doc(); // doc() sans ID = auto-ID
+    batch.set(txRef, {
+        userId,
+        packName:        packName || null,
+        amount:          pendingDoc.data().amount || null,
+        transactionId:   transactionId,
+        orderId:         cleanOrderId,
+        originalOrderId: pendingDoc.data().originalOrderId || cleanOrderId,
+        status:          'completed',
+        createdAt:       admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 5. Marquer le pending_payment comme traité
+    batch.update(pendingRef, {
+        status:      'completed',
+        processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        transactionId
+    });
+
+    await batch.commit();
+    console.log(`✅ Transaction enregistrée | purchaseId: ${purchaseRef.id} | txId: ${txRef.id}`);
+
+    return { verified: true, status, transactionId, userId, packName, alreadyProcessed: false };
 }
 
-/**
- * Endpoint de création de paiement
- */
+// ─────────────────────────────────────────────
+//  HEALTH CHECK
+// ─────────────────────────────────────────────
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        mode: MONCASH_MODE.toUpperCase(),
+        firebase: db ? 'connected' : 'disabled',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ─────────────────────────────────────────────
+//  POST /createpayment
+//  Corps attendu : { amount, orderId, userId, packName }
+//  BUG FIX #2 : packName maintenant accepté et sauvegardé
+// ─────────────────────────────────────────────
 app.post('/createpayment', async (req, res) => {
     try {
-        const { amount, orderId, userId } = req.body;
+        const { amount, orderId, userId, packName } = req.body;
+
         if (!amount || !orderId) {
-            return res.status(400).json({ error: "Montant ou orderId manquant." });
+            return res.status(400).json({ error: "Champs 'amount' et 'orderId' requis." });
+        }
+        if (!userId) {
+            return res.status(400).json({ error: "Champ 'userId' requis pour lier le paiement à l'utilisateur." });
         }
 
-        const tokenData = await getAccessToken();
-        const accessToken = tokenData.access_token;
+        // FIX orderId : extraire le suffixe numérique s'il y a des lettres
+        // Ex: "QUIZ_cmpzR_Mathématiques_1778545562103" → "1778545562103"
+        // MonCash exige un orderId numérique
+        let cleanOrderId;
+        if (/^\d+$/.test(orderId.toString())) {
+            cleanOrderId = orderId.toString(); // Déjà numérique
+        } else {
+            // Extraire le dernier bloc numérique (le timestamp à la fin)
+            const numericParts = orderId.toString().match(/\d+/g);
+            cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : Date.now().toString();
+        }
 
-        console.log(`Appel CreatePayment pour ${amount} HTG (orderId: ${orderId}, userId: ${userId || 'ANONYME'})...`);
-        const startTime = Date.now();
-        // S'assurer que orderId est uniquement numérique pour la compatibilité
-        const cleanOrderId = orderId.toString().replace(/\D/g, "") || Date.now().toString();
+        console.log(`💳 Création paiement | amount: ${amount} HTG | orderId: ${cleanOrderId} | userId: ${userId} | pack: ${packName || 'N/A'}`);
 
-        // 1. Sauvegarder la trace du paiement dans Firestore si userId est présent
-        if (userId && db) {
+        // Sauvegarder la trace complète AVANT d'appeler MonCash
+        if (db) {
             try {
                 await db.collection('pending_payments').doc(cleanOrderId).set({
-                    userId: userId,
+                    userId,
+                    packName: packName || null,   // BUG FIX #2 : packName sauvegardé
                     amount: parseFloat(amount),
                     status: 'pending',
+                    originalOrderId: orderId,
                     createdAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                console.log(`pending_payment enregistré pour orderId: ${cleanOrderId}`);
+                console.log(`📝 pending_payment enregistré (orderId: ${cleanOrderId})`);
             } catch (e) {
-                console.error("Erreur sauvegarde pending_payment:", e.message);
+                console.error("⚠️  Erreur sauvegarde pending_payment:", e.message);
+                // Non-bloquant : on continue quand même
             }
         }
+
+        const accessToken = await getAccessToken();
+        const startTime = Date.now();
 
         const paymentResponse = await axios.post(
             `${BASE_DOMAIN}/v1/CreatePayment`,
             { amount: parseFloat(amount), orderId: cleanOrderId },
             {
-                headers: { 
-                    'Authorization': `Bearer ${accessToken}`, 
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
-                    'User-Agent': 'MonCash-Node-Client'
+                    'User-Agent': 'MonCash-Node-Client/2.0'
                 },
-                timeout: 180000 // 180 seconds (3 minutes) - MonCash Sandbox is very slow
+                timeout: 180000
             }
         );
-        const duration = (Date.now() - startTime) / 1000;
-        console.log(`Réponse CreatePayment reçue en ${duration}s !`);
 
-        // Extraction robuste du token (objet ou string selon API)
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`✅ CreatePayment répondu en ${duration}s`);
+
+        // Extraction robuste du token de paiement
         const pToken = paymentResponse.data.payment_token;
         const tokenString = (typeof pToken === 'object') ? pToken.token : pToken;
 
@@ -138,161 +296,242 @@ app.post('/createpayment', async (req, res) => {
         return res.status(200).json({
             success: true,
             redirect_url: redirectUrl,
-            payment_token: tokenString
+            payment_token: tokenString,
+            orderId: cleanOrderId  // Renvoyer l'orderId nettoyé à l'APK pour vérification ultérieure
         });
+
     } catch (error) {
         const details = error.response?.data || error.message;
-        console.error("Erreur CreatePayment:", JSON.stringify(details));
-        return res.status(500).json({ error: "Erreur MonCash", details });
+        console.error("❌ Erreur /createpayment:", JSON.stringify(details));
+        return res.status(500).json({ error: "Erreur MonCash lors de la création du paiement.", details });
     }
 });
 
+// ─────────────────────────────────────────────
+//  GET /verifypayment?orderId=xxx
+//  Accepte aussi les orderId complexes (ex: "QUIZ_cmpzR_Math_1778545562103")
+// ─────────────────────────────────────────────
 app.get('/verifypayment', async (req, res) => {
     try {
         const { orderId } = req.query;
-        if (!orderId) return res.status(400).json({ error: "orderId manquant." });
+        if (!orderId) return res.status(400).json({ error: "'orderId' manquant dans les paramètres." });
 
-        const cleanOrderId = orderId.toString().replace(/\D/g, "") || orderId.toString();
-
-        const tokenData = await getAccessToken();
-        const accessToken = tokenData.access_token;
-
-        const verifyResponse = await axios.post(
-            `${BASE_DOMAIN}/V1/RetrieveTransactionPayment`,
-            { transactionId: "", orderId: cleanOrderId },
-            {
-                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                timeout: 60000 // 60 seconds
-            }
-        ).catch(() => axios.post(
-            `${BASE_DOMAIN}/V1/CheckPayment`,
-            { reference: cleanOrderId },
-            {
-                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-                timeout: 60000 // 60 seconds
-            }
-        ));
-
-        const paymentData = verifyResponse.data.payment || verifyResponse.data;
-        const status = paymentData.message || "inconnu";
-
-        // 2. Si le paiement est réussi, mettre à jour le statut dans Firestore
-        if (status.toUpperCase() === "SUCCESSFUL" && db) {
-            try {
-                const pendingRef = db.collection('pending_payments').doc(cleanOrderId);
-                const doc = await pendingRef.get();
-
-                if (doc.exists) {
-                    const { userId } = doc.data();
-                    if (!userId) throw new Error("userId absent dans pending_payment");
-                    console.log(`Paiement réussi pour l'utilisateur : ${userId}`);
-
-                    // Mise à jour du statut Premium (merge pour ne pas écraser le profil)
-                    await db.collection('users').doc(userId).set({
-                        isPremium: true,
-                        lastPurchaseDate: admin.firestore.FieldValue.serverTimestamp(),
-                        lastTransactionId: paymentData.transaction_id || null
-                    }, { merge: true });
-
-                    // Marquer la transaction comme traitée
-                    await pendingRef.update({ status: 'completed' });
-                    console.log(`✅ Statut isPremium mis à jour pour ${userId}`);
-                } else {
-                    console.warn(`Aucun pending_payment trouvé pour orderId: ${cleanOrderId}`);
-                }
-            } catch (fsError) {
-                console.error("Erreur mise à jour Firestore post-paiement:", fsError.message);
-            }
+        // Même logique que /createpayment : extraire le dernier bloc numérique
+        let cleanOrderId;
+        if (/^\d+$/.test(orderId.toString())) {
+            cleanOrderId = orderId.toString();
+        } else {
+            const numericParts = orderId.toString().match(/\d+/g);
+            cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : orderId.toString();
         }
 
-        return res.status(200).json({
-            success: true,
-            status: status,
-            transactionId: paymentData.transaction_id,
-            reference: paymentData.reference
-        });
+        console.log(`🔍 /verifypayment | original: "${orderId}" → clean: "${cleanOrderId}"`);
+        const result = await verifyAndUpdateFirestore(cleanOrderId);
+
+        return res.status(200).json({ success: true, ...result });
+
     } catch (error) {
         const details = error.response?.data || error.message;
-        console.error("Erreur verifypayment:", JSON.stringify(details));
-        return res.status(500).json({ error: "Erreur verification", details });
+        console.error("❌ Erreur /verifypayment:", JSON.stringify(details));
+        return res.status(500).json({ error: "Erreur lors de la vérification du paiement.", details });
     }
 });
 
-app.post('/webhookk', (req, res) => {
-    console.log("Notification MonCash reçue :", req.body);
+// ─────────────────────────────────────────────
+//  GET /verifybypending?originalOrderId=QUIZ_cmpzR_Math_xxx
+//  Permet à l'APK de vérifier avec son orderId ORIGINAL (avant nettoyage)
+//  en cherchant dans pending_payments.originalOrderId
+// ─────────────────────────────────────────────
+app.get('/verifybypending', async (req, res) => {
+    try {
+        const { originalOrderId, userId } = req.query;
+        if (!originalOrderId) return res.status(400).json({ error: "'originalOrderId' manquant." });
+        if (!db) return res.status(503).json({ error: "Firestore non disponible." });
+
+        // Chercher dans pending_payments par originalOrderId
+        const snapshot = await db.collection('pending_payments')
+            .where('originalOrderId', '==', originalOrderId)
+            .where('userId', '==', userId || '')
+            .limit(1)
+            .get();
+
+        if (snapshot.empty) {
+            // Fallback : extraire le numérique et vérifier directement
+            const numericParts = originalOrderId.toString().match(/\d+/g);
+            const cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : null;
+
+            if (!cleanOrderId) {
+                return res.status(404).json({ error: "pending_payment introuvable.", originalOrderId });
+            }
+
+            console.log(`🔍 /verifybypending | fallback numeric: "${cleanOrderId}"`);
+            const result = await verifyAndUpdateFirestore(cleanOrderId);
+            return res.status(200).json({ success: true, ...result });
+        }
+
+        const cleanOrderId = snapshot.docs[0].id;
+        console.log(`🔍 /verifybypending | found cleanOrderId: "${cleanOrderId}"`);
+        const result = await verifyAndUpdateFirestore(cleanOrderId);
+        return res.status(200).json({ success: true, ...result });
+
+    } catch (error) {
+        const details = error.response?.data || error.message;
+        console.error("❌ Erreur /verifybypending:", JSON.stringify(details));
+        return res.status(500).json({ error: "Erreur vérification.", details });
+    }
+});
+
+// ─────────────────────────────────────────────
+//  POST /webhook — Notifications push MonCash
+//  BUG FIX #5 : Traitement réel des notifications
+// ─────────────────────────────────────────────
+app.post('/webhook', async (req, res) => {
+    console.log("🔔 Webhook MonCash reçu :", JSON.stringify(req.body));
+
+    try {
+        const { orderId, reference, transactionId } = req.body;
+        const rawOrderId = orderId || reference || transactionId;
+
+        if (!rawOrderId) {
+            console.warn("⚠️  Webhook reçu sans orderId/reference.");
+            return res.status(200).send("OK"); // Toujours 200 pour MonCash
+        }
+
+        const cleanOrderId = rawOrderId.toString().replace(/\D/g, "") || rawOrderId.toString();
+        await verifyAndUpdateFirestore(cleanOrderId);
+
+    } catch (e) {
+        console.error("❌ Erreur traitement webhook:", e.message);
+    }
+
+    // Toujours répondre 200 rapidement à MonCash
     res.status(200).send("OK");
 });
 
-app.get('/successs', (req, res) => {
-    res.send(`
-        <div style="text-align:center; padding:50px; font-family:sans-serif;">
-            <h1 style="color:#2f855a;">Paiement Réussi !</h1>
-            <p>Merci pour votre achat. Vous pouvez retourner dans l'application.</p>
-        </div>
-    `);
+// Garder l'ancienne route pour compatibilité
+app.post('/webhookk', async (req, res) => {
+    req.url = '/webhook';
+    app.handle(req, res);
 });
 
-const RENDER_EXTERNAL_URL = "https://moncash-backend-5ez9.onrender.com";
-setInterval(() => {
-    https.get(RENDER_EXTERNAL_URL, (res) => { }).on('error', (e) => { });
-}, 10 * 60 * 1000);
+// ─────────────────────────────────────────────
+//  GET /successs — Page de retour après paiement MonCash
+//  BUG FIX #3 : Déclenche automatiquement la vérification
+// ─────────────────────────────────────────────
+app.get('/successs', async (req, res) => {
+    const { orderId } = req.query;
+    let verificationStatus = "en attente";
+    let packName = null;
 
-app.get('/test-pay-ultra', async (req, res) => {
-    try {
-        const tokenData = await getAccessToken();
-        const accessToken = tokenData.access_token;
-        const orderId = "U_" + Math.floor(Math.random() * 1000000);
-
-        const urls = [
-            `${BASE_DOMAIN}/v1/CreatePayment`,
-            `${BASE_DOMAIN}/V1/InitiatePayment`,
-            "https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware/v1/CreatePayment"
-        ];
-
-        const authHeaders = [
-            { 'Authorization': `Bearer ${accessToken}` },
-            { 'Authorization': accessToken },
-            { 'X-MonCash-Token': accessToken }
-        ];
-
-        const accounts = MONCASH_ACCOUNT ? [MONCASH_ACCOUNT, MONCASH_ACCOUNT.replace('509', '')] : [''];
-        const amounts = [10, "10", 10.0];
-        const keys = ["reference", "orderId"];
-
-        const results = [];
-        for (const url of urls) {
-            for (const auth of authHeaders) {
-                for (const acc of accounts) {
-                    for (const amt of amounts) {
-                        for (const key of keys) {
-                            try {
-                                const payload = { [key]: orderId, amount: amt, account: acc };
-                                const resp = await axios.post(url, payload, {
-                                    headers: { ...auth, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                                    timeout: 90000 // 90 seconds for test loop
-                                });
-                                results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: resp.status, data: resp.data });
-                            } catch (e) {
-                                // On ne garde que les erreurs intéressantes (pas les 404 obvious)
-                                if (e.response?.status !== 404) {
-                                    results.push({ url, auth: Object.keys(auth)[0], acc, amt, key, status: e.response?.status, msg: e.response?.data?.message || e.message });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    if (orderId && db) {
+        try {
+            const cleanOrderId = orderId.toString().replace(/\D/g, "") || orderId;
+            const result = await verifyAndUpdateFirestore(cleanOrderId);
+            verificationStatus = result.verified ? "✅ Confirmé" : "⚠️ Non confirmé";
+            packName = result.packName || null;
+        } catch (e) {
+            console.error("❌ Erreur vérification auto /successs:", e.message);
+            verificationStatus = "Erreur de vérification";
         }
-        res.json({ 
-            version: "V_90S_DIAG",
-            timestamp: new Date().toISOString(),
-            results: results.slice(0, 100) 
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
     }
+
+    res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paiement Réussi — PNH Infos Plus</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #fff;
+            padding: 3rem 2.5rem;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.08);
+            text-align: center;
+            max-width: 420px;
+            width: 90%;
+        }
+        .icon { font-size: 4rem; margin-bottom: 1.5rem; }
+        h1 { font-size: 1.6rem; font-weight: 700; color: #166534; margin-bottom: .75rem; }
+        p { color: #4b5563; line-height: 1.7; margin-bottom: .5rem; }
+        .badge {
+            display: inline-block;
+            background: #dcfce7;
+            color: #166534;
+            border-radius: 99px;
+            padding: .4rem 1.2rem;
+            font-weight: 600;
+            font-size: .9rem;
+            margin-top: 1.5rem;
+        }
+        .pack { font-weight: 700; color: #1A3B8E; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">🎉</div>
+        <h1>Paiement Réussi !</h1>
+        <p>Merci pour votre achat. Votre accès a été activé.</p>
+        ${packName ? `<p>Pack débloqué : <span class="pack">${packName}</span></p>` : ''}
+        <p>Retournez dans l'application PNH Infos Plus pour accéder à votre contenu.</p>
+        <span class="badge">Statut : ${verificationStatus}</span>
+    </div>
+</body>
+</html>`);
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Serveur MonCash actif sur le port ${PORT}`));
+// ─────────────────────────────────────────────
+//  GET /failuree — Page de retour en cas d'échec
+// ─────────────────────────────────────────────
+app.get('/failuree', (req, res) => {
+    res.send(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Paiement Échoué</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #fff5f5 0%, #fee2e2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .card { background: #fff; padding: 3rem 2.5rem; border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.08); text-align: center; max-width: 420px; width: 90%; }
+        .icon { font-size: 4rem; margin-bottom: 1.5rem; }
+        h1 { font-size: 1.6rem; font-weight: 700; color: #991b1b; margin-bottom: .75rem; }
+        p { color: #4b5563; line-height: 1.7; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">❌</div>
+        <h1>Paiement Annulé</h1>
+        <p>Votre paiement n'a pas abouti. Aucun montant n'a été débité.</p>
+        <p style="margin-top:1rem;">Vous pouvez retourner dans l'application et réessayer.</p>
+    </div>
+</body>
+</html>`);
+});
 
+// ─────────────────────────────────────────────
+//  KEEP-ALIVE — Empêche le serveur Render de dormir
+// ─────────────────────────────────────────────
+setInterval(() => {
+    https.get(`${SERVER_URL}/health`, () => {}).on('error', () => {});
+}, 10 * 60 * 1000); // Toutes les 10 minutes
+
+// ─────────────────────────────────────────────
+//  DÉMARRAGE
+// ─────────────────────────────────────────────
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+    console.log(`\n🚀 Serveur MonCash actif sur le port ${PORT}`);
+    console.log(`   Health check : http://localhost:${PORT}/health\n`);
+});
