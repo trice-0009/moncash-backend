@@ -1,0 +1,60 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 👤 UTILISATEURS
+    match /users/{userId} {
+
+      // Lecture et création
+      allow read, create: if request.auth != null
+                           && request.auth.uid == userId;
+
+      // Autorise l'utilisateur à modifier son document
+      allow update: if request.auth != null
+                    && request.auth.uid == userId;
+
+      // Suppression interdite
+      allow delete: if false;
+
+      // Sous-collections privées (documents d'identité)
+      match /documents/{docType} {
+        allow read, write: if request.auth != null
+                            && request.auth.uid == userId;
+      }
+
+      // Historique achats — lecture seule par l'utilisateur propriétaire
+      // Écriture réservée au backend (Firebase Admin SDK bypass les règles)
+      match /purchases/{purchaseId} {
+        allow read: if request.auth != null
+                     && request.auth.uid == userId;
+        allow write: if false; // Seul le backend Admin peut écrire
+      }
+    }
+
+    // 📦 PACKS
+    match /packs/{packId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // 🏆 RESULTATS CONCOURS
+    match /resultats_concours/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // 💳 TRANSACTIONS — chaque utilisateur peut voir UNIQUEMENT ses propres transactions
+    // (lecture filtrée par userId côté client)
+    match /transactions/{txId} {
+      allow read: if request.auth != null
+                   && resource.data.userId == request.auth.uid;
+      allow write: if false; // Seul le backend Admin peut écrire
+    }
+
+    // 🔒 BLOQUE LE RESTE (pending_payments, etc. — accès backend uniquement)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

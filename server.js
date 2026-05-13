@@ -136,7 +136,7 @@ async function verifyAndUpdateFirestore(cleanOrderId) {
     const { userId, packName, status: currentStatus } = pendingDoc.data();
 
     // ── Idempotence : ne pas traiter deux fois le même paiement ──
-    if (currentStatus === 'completed') {
+    if (currentStatus === 'paid' || currentStatus === 'completed') {
         console.log(`ℹ️  Paiement ${cleanOrderId} déjà traité — ignoré.`);
         return { verified: true, status, transactionId, alreadyProcessed: true };
     }
@@ -157,13 +157,12 @@ async function verifyAndUpdateFirestore(cleanOrderId) {
         lastTransactionId: transactionId
     }, { merge: true });
 
-    // 2. Ajouter le pack dans downloadedPacks ET ownedPacks (APK)
+    // 2. Débloquer pack utilisateur
     if (packName) {
         batch.update(userRef, {
-            downloadedPacks: admin.firestore.FieldValue.arrayUnion(packName),
-            ownedPacks:      admin.firestore.FieldValue.arrayUnion(packName)
+            ownedPacks: admin.firestore.FieldValue.arrayUnion(packName)
         });
-        console.log(`📦 Pack "${packName}" ajouté dans downloadedPacks + ownedPacks de ${userId}`);
+        console.log(`🔥 Pack "${packName}" ajouté dans ownedPacks de ${userId}`);
     } else {
         console.warn(`⚠️  packName absent pour orderId ${cleanOrderId}`);
     }
@@ -190,13 +189,13 @@ async function verifyAndUpdateFirestore(cleanOrderId) {
         transactionId:   transactionId,
         orderId:         cleanOrderId,
         originalOrderId: pendingDoc.data().originalOrderId || cleanOrderId,
-        status:          'completed',
+        status:          'paid',
         createdAt:       admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // 5. Marquer le pending_payment comme traité
+    // 5. Marquer paiement comme validé
     batch.update(pendingRef, {
-        status:      'completed',
+        status:      'paid',
         processedAt: admin.firestore.FieldValue.serverTimestamp(),
         transactionId
     });
@@ -235,17 +234,8 @@ app.post('/createpayment', async (req, res) => {
             return res.status(400).json({ error: "Champ 'userId' requis pour lier le paiement à l'utilisateur." });
         }
 
-        // FIX orderId : extraire le suffixe numérique s'il y a des lettres
-        // Ex: "QUIZ_cmpzR_Mathématiques_1778545562103" → "1778545562103"
-        // MonCash exige un orderId numérique
-        let cleanOrderId;
-        if (/^\d+$/.test(orderId.toString())) {
-            cleanOrderId = orderId.toString(); // Déjà numérique
-        } else {
-            // Extraire le dernier bloc numérique (le timestamp à la fin)
-            const numericParts = orderId.toString().match(/\d+/g);
-            cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : Date.now().toString();
-        }
+        // Plus de parsing de string QUIZ_xxx
+        const cleanOrderId = orderId.toString();
 
         console.log(`💳 Création paiement | amount: ${amount} HTG | orderId: ${cleanOrderId} | userId: ${userId} | pack: ${packName || 'N/A'}`);
 
@@ -316,16 +306,10 @@ app.get('/verifypayment', async (req, res) => {
         const { orderId } = req.query;
         if (!orderId) return res.status(400).json({ error: "'orderId' manquant dans les paramètres." });
 
-        // Même logique que /createpayment : extraire le dernier bloc numérique
-        let cleanOrderId;
-        if (/^\d+$/.test(orderId.toString())) {
-            cleanOrderId = orderId.toString();
-        } else {
-            const numericParts = orderId.toString().match(/\d+/g);
-            cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : orderId.toString();
-        }
+        // Plus de parsing de string QUIZ_xxx
+        const cleanOrderId = orderId.toString();
 
-        console.log(`🔍 /verifypayment | original: "${orderId}" → clean: "${cleanOrderId}"`);
+        console.log(`🔍 /verifypayment | orderId: "${cleanOrderId}"`);
         const result = await verifyAndUpdateFirestore(cleanOrderId);
 
         return res.status(200).json({ success: true, ...result });
@@ -338,9 +322,8 @@ app.get('/verifypayment', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-//  GET /verifybypending?originalOrderId=QUIZ_cmpzR_Math_xxx
-//  Permet à l'APK de vérifier avec son orderId ORIGINAL (avant nettoyage)
-//  en cherchant dans pending_payments.originalOrderId
+//  GET /verifybypending?originalOrderId=xxx
+//  Permet à l'APK de vérifier avec son orderId
 // ─────────────────────────────────────────────
 app.get('/verifybypending', async (req, res) => {
     try {
@@ -348,29 +331,10 @@ app.get('/verifybypending', async (req, res) => {
         if (!originalOrderId) return res.status(400).json({ error: "'originalOrderId' manquant." });
         if (!db) return res.status(503).json({ error: "Firestore non disponible." });
 
-        // Chercher dans pending_payments par originalOrderId
-        const snapshot = await db.collection('pending_payments')
-            .where('originalOrderId', '==', originalOrderId)
-            .where('userId', '==', userId || '')
-            .limit(1)
-            .get();
+        // Plus de parsing de string QUIZ_xxx
+        const cleanOrderId = originalOrderId.toString();
 
-        if (snapshot.empty) {
-            // Fallback : extraire le numérique et vérifier directement
-            const numericParts = originalOrderId.toString().match(/\d+/g);
-            const cleanOrderId = numericParts ? numericParts[numericParts.length - 1] : null;
-
-            if (!cleanOrderId) {
-                return res.status(404).json({ error: "pending_payment introuvable.", originalOrderId });
-            }
-
-            console.log(`🔍 /verifybypending | fallback numeric: "${cleanOrderId}"`);
-            const result = await verifyAndUpdateFirestore(cleanOrderId);
-            return res.status(200).json({ success: true, ...result });
-        }
-
-        const cleanOrderId = snapshot.docs[0].id;
-        console.log(`🔍 /verifybypending | found cleanOrderId: "${cleanOrderId}"`);
+        console.log(`🔍 /verifybypending | orderId: "${cleanOrderId}"`);
         const result = await verifyAndUpdateFirestore(cleanOrderId);
         return res.status(200).json({ success: true, ...result });
 
@@ -397,7 +361,7 @@ app.post('/webhook', async (req, res) => {
             return res.status(200).send("OK"); // Toujours 200 pour MonCash
         }
 
-        const cleanOrderId = rawOrderId.toString().replace(/\D/g, "") || rawOrderId.toString();
+        const cleanOrderId = rawOrderId.toString();
         await verifyAndUpdateFirestore(cleanOrderId);
 
     } catch (e) {
@@ -425,7 +389,7 @@ app.get('/successs', async (req, res) => {
 
     if (orderId && db) {
         try {
-            const cleanOrderId = orderId.toString().replace(/\D/g, "") || orderId;
+            const cleanOrderId = orderId.toString();
             const result = await verifyAndUpdateFirestore(cleanOrderId);
             verificationStatus = result.verified ? "✅ Confirmé" : "⚠️ Non confirmé";
             packName = result.packName || null;
