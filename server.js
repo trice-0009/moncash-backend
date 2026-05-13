@@ -91,22 +91,23 @@ async function verifyAndUpdateFirestore(cleanOrderId) {
 
     const accessToken = await getAccessToken();
 
-    // Tentative 1 : RetrieveTransactionPayment (API officielle)
+    // Tentative 1 : RetrieveOrderPayment (Recherche par orderId)
     let verifyResponse;
     try {
         verifyResponse = await axios.post(
-            `${BASE_DOMAIN}/V1/RetrieveTransactionPayment`,
-            { transactionId: "", orderId: cleanOrderId },
+            `${BASE_DOMAIN}/v1/RetrieveOrderPayment`,
+            { orderId: cleanOrderId },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                 timeout: 60000
             }
         );
-    } catch {
-        // Tentative 2 : CheckPayment (fallback)
+    } catch (e) {
+        // En cas d'échec de la première requête (parfois v1 vs V1)
+        console.warn(`⚠️  Echec RetrieveOrderPayment, tentative V1...`, e.message);
         verifyResponse = await axios.post(
-            `${BASE_DOMAIN}/V1/CheckPayment`,
-            { reference: cleanOrderId },
+            `${BASE_DOMAIN}/V1/RetrieveOrderPayment`,
+            { orderId: cleanOrderId },
             {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                 timeout: 60000
